@@ -1,0 +1,688 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Assessment Viewer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 20px;
+    font-family: Arial, sans-serif;
+    background: #f3f4f6;
+    color: #222;
+}
+
+h1 {
+    text-align: center;
+    margin: 0 0 24px;
+}
+
+.variants {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.variant {
+    min-width: 0;
+    background: white;
+    border-radius: 14px;
+    padding: 14px;
+    box-shadow: 0 3px 12px #00000012;
+    border: 2px solid transparent;
+    transition: border-color .15s;
+}
+
+.variant.active {
+    border-color: #6366f1;
+}
+
+.variant h2 {
+    text-align: center;
+    margin: 4px 0 14px;
+}
+
+.upload {
+    display: block;
+    width: 100%;
+    padding: 11px;
+    margin-bottom: 10px;
+    border: 0;
+    border-radius: 8px;
+    background: #4f46e5;
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.upload:hover {
+    background: #4338ca;
+}
+
+.file-input {
+    display: none;
+}
+
+.drop-zone {
+    border: 2px dashed #c7c7d1;
+    border-radius: 10px;
+    padding: 12px;
+    text-align: center;
+    color: #777;
+    font-size: 13px;
+    margin-bottom: 12px;
+    transition: .15s;
+}
+
+.drop-zone.dragover {
+    background: #eef2ff;
+    border-color: #4f46e5;
+    color: #3730a3;
+}
+
+.image-area {
+    width: 100%;
+    height: 310px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f8f8fa;
+    border: 1px solid #e5e5e5;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.image-area img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.empty {
+    color: #aaa;
+    text-align: center;
+    padding: 15px;
+    font-size: 14px;
+}
+
+.counter {
+    text-align: center;
+    margin: 12px 0;
+    font-size: 14px;
+    color: #555;
+}
+
+.slots {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.slot {
+    padding: 9px 2px;
+    border: 1px solid #ddd;
+    border-radius: 7px;
+    background: #f3f4f6;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.slot.filled {
+    background: #e0e7ff;
+    border-color: #818cf8;
+}
+
+.slot.selected {
+    background: #4f46e5;
+    color: white;
+    border-color: #4f46e5;
+}
+
+.navigation {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.navigation button,
+.delete {
+    flex: 1;
+    padding: 10px;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.navigation button {
+    background: #e5e7eb;
+}
+
+.navigation button:hover {
+    background: #d1d5db;
+}
+
+.delete {
+    width: 100%;
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.delete:hover {
+    background: #fecaca;
+}
+
+.hint {
+    text-align: center;
+    color: #888;
+    font-size: 12px;
+    margin-top: 12px;
+}
+
+#toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #222;
+    color: white;
+    padding: 11px 18px;
+    border-radius: 9px;
+    font-size: 14px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s;
+    z-index: 1000;
+}
+
+#toast.show {
+    opacity: 1;
+}
+
+#fullscreen {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: #111;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    cursor: zoom-out;
+}
+
+#fullscreen img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+@media (max-width: 850px) {
+    .variants {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<h1>Assessment Viewer</h1>
+
+<div class="variants" id="variants"></div>
+
+<div id="toast"></div>
+
+<div id="fullscreen" onclick="closeFullscreen()">
+    <img id="fullscreenImage" alt="Fullscreen image">
+</div>
+
+<script>
+const DB_NAME = "AssessmentViewerDB";
+const STORE_NAME = "images";
+const MAX_IMAGES = 10;
+const VARIANT_COUNT = 3;
+
+let db;
+let activeVariant = 0;
+let variants = [];
+
+function showToast(message) {
+    const toast = document.getElementById("toast");
+    toast.textContent = message;
+    toast.classList.add("show");
+
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => {
+        toast.classList.remove("show");
+    }, 2200);
+}
+
+// ---------- DATABASE ----------
+
+function openDatabase() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+
+        request.onupgradeneeded = () => {
+            const database = request.result;
+
+            if (!database.objectStoreNames.contains(STORE_NAME)) {
+                database.createObjectStore(STORE_NAME);
+            }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function saveImage(key, blob) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, "readwrite");
+        transaction.objectStore(STORE_NAME).put(blob, key);
+
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+    });
+}
+
+function getImage(key) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, "readonly");
+        const request = transaction.objectStore(STORE_NAME).get(key);
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function deleteImage(key) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, "readwrite");
+        transaction.objectStore(STORE_NAME).delete(key);
+
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+    });
+}
+
+function imageKey(variantIndex, slotIndex) {
+    return `variant-${variantIndex}-image-${slotIndex}`;
+}
+
+// ---------- INITIALIZATION ----------
+
+async function initialize() {
+    db = await openDatabase();
+
+    variants = Array.from({ length: VARIANT_COUNT }, () => ({
+        current: 0,
+        images: Array(MAX_IMAGES).fill(null),
+        urls: Array(MAX_IMAGES).fill(null)
+    }));
+
+    for (let v = 0; v < VARIANT_COUNT; v++) {
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            const blob = await getImage(imageKey(v, i));
+
+            if (blob) {
+                variants[v].images[i] = blob;
+            }
+        }
+    }
+
+    renderAll();
+}
+
+// ---------- RENDERING ----------
+
+function renderAll() {
+    const container = document.getElementById("variants");
+    container.innerHTML = "";
+
+    for (let v = 0; v < VARIANT_COUNT; v++) {
+        const card = document.createElement("section");
+        card.className = "variant";
+        card.id = `variant-${v}`;
+
+        card.innerHTML = `
+            <h2>Вариант ${v + 1}</h2>
+
+            <label class="upload">
+                Загрузить изображения
+                <input
+                    class="file-input"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onchange="handleFileUpload(event, ${v})"
+                >
+            </label>
+
+            <div class="drop-zone"
+                 id="drop-${v}"
+                 onclick="setActiveVariant(${v})">
+                Перетащи изображения сюда
+                <br>
+                или выбери этот вариант и нажми Ctrl + V
+            </div>
+
+            <div class="image-area"
+                 id="image-area-${v}"
+                 onclick="openCurrentFullscreen(${v})">
+                <div class="empty">Нет изображения</div>
+            </div>
+
+            <div class="counter" id="counter-${v}"></div>
+
+            <div class="slots" id="slots-${v}"></div>
+
+            <div class="navigation">
+                <button onclick="moveImage(${v}, -1)">← Назад</button>
+                <button onclick="moveImage(${v}, 1)">Вперёд →</button>
+            </div>
+
+            <button class="delete" onclick="removeCurrentImage(${v})">
+                Удалить изображение
+            </button>
+
+            <div class="hint">
+                Нажми на столбец, чтобы выбрать его для Ctrl + V
+            </div>
+        `;
+
+        container.appendChild(card);
+
+        setupDropZone(v);
+        renderVariant(v);
+    }
+
+    setActiveVariant(0);
+}
+
+function renderVariant(v) {
+    const data = variants[v];
+    const imageArea = document.getElementById(`image-area-${v}`);
+    const counter = document.getElementById(`counter-${v}`);
+    const slots = document.getElementById(`slots-${v}`);
+
+    const currentImage = data.images[data.current];
+
+    if (data.urls[data.current]) {
+        URL.revokeObjectURL(data.urls[data.current]);
+        data.urls[data.current] = null;
+    }
+
+    imageArea.innerHTML = "";
+
+    if (currentImage) {
+        const url = URL.createObjectURL(currentImage);
+        data.urls[data.current] = url;
+
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = `Вариант ${v + 1}, задание ${data.current + 1}`;
+
+        imageArea.appendChild(img);
+    } else {
+        imageArea.innerHTML = `
+            <div class="empty">
+                Изображение ${data.current + 1} ещё не загружено
+                <br><br>
+                Вставь картинку через Ctrl + V
+            </div>
+        `;
+    }
+
+    const filled = data.images.filter(Boolean).length;
+
+    counter.textContent =
+        `Задание ${data.current + 1} из ${MAX_IMAGES} · Загружено: ${filled}/${MAX_IMAGES}`;
+
+    slots.innerHTML = "";
+
+    for (let i = 0; i < MAX_IMAGES; i++) {
+        const button = document.createElement("button");
+
+        button.className = "slot";
+        button.textContent = i + 1;
+
+        if (data.images[i]) button.classList.add("filled");
+        if (i === data.current) button.classList.add("selected");
+
+        button.onclick = () => {
+            data.current = i;
+            setActiveVariant(v);
+            renderVariant(v);
+        };
+
+        slots.appendChild(button);
+    }
+}
+
+// ---------- ACTIVE VARIANT ----------
+
+function setActiveVariant(v) {
+    activeVariant = v;
+
+    document.querySelectorAll(".variant").forEach((card, index) => {
+        card.classList.toggle("active", index === v);
+    });
+}
+
+// ---------- IMAGE INSERTION ----------
+
+async function insertImage(v, file) {
+    if (!file || !file.type.startsWith("image/")) {
+        showToast("Можно вставлять только изображения");
+        return false;
+    }
+
+    const data = variants[v];
+
+    let emptySlot = data.images.findIndex(image => image === null);
+
+    if (emptySlot === -1) {
+        showToast(`Вариант ${v + 1} уже заполнен`);
+        return false;
+    }
+
+    try {
+        await saveImage(imageKey(v, emptySlot), file);
+
+        data.images[emptySlot] = file;
+        data.current = emptySlot;
+
+        setActiveVariant(v);
+        renderVariant(v);
+
+        showToast(`Изображение добавлено в вариант ${v + 1}`);
+        return true;
+    } catch (error) {
+        console.error(error);
+        showToast("Не удалось сохранить изображение");
+        return false;
+    }
+}
+
+// ---------- FILE UPLOAD ----------
+
+async function handleFileUpload(event, v) {
+    const files = Array.from(event.target.files || []);
+
+    if (!files.length) return;
+
+    let added = 0;
+
+    for (const file of files) {
+        const success = await insertImage(v, file);
+        if (success) added++;
+    }
+
+    if (added > 0) {
+        showToast(`Добавлено изображений: ${added}`);
+    }
+
+    event.target.value = "";
+}
+
+// ---------- CLIPBOARD PASTE ----------
+
+document.addEventListener("paste", async event => {
+    const clipboardItems = event.clipboardData?.items;
+
+    if (!clipboardItems) return;
+
+    const imageFiles = [];
+
+    for (const item of clipboardItems) {
+        if (item.type.startsWith("image/")) {
+            const file = item.getAsFile();
+
+            if (file) imageFiles.push(file);
+        }
+    }
+
+    if (imageFiles.length === 0) {
+        return;
+    }
+
+    event.preventDefault();
+
+    for (const file of imageFiles) {
+        await insertImage(activeVariant, file);
+    }
+});
+
+// ---------- DRAG AND DROP ----------
+
+function setupDropZone(v) {
+    const zone = document.getElementById(`drop-${v}`);
+    const card = document.getElementById(`variant-${v}`);
+
+    [zone, card].forEach(element => {
+        element.addEventListener("dragover", event => {
+            event.preventDefault();
+            zone.classList.add("dragover");
+        });
+
+        element.addEventListener("dragleave", event => {
+            if (!element.contains(event.relatedTarget)) {
+                zone.classList.remove("dragover");
+            }
+        });
+
+        element.addEventListener("drop", async event => {
+            event.preventDefault();
+            zone.classList.remove("dragover");
+
+            setActiveVariant(v);
+
+            const files = Array.from(event.dataTransfer.files || [])
+                .filter(file => file.type.startsWith("image/"));
+
+            for (const file of files) {
+                await insertImage(v, file);
+            }
+        });
+    });
+
+    zone.addEventListener("click", () => setActiveVariant(v));
+}
+
+// ---------- NAVIGATION ----------
+
+function moveImage(v, direction) {
+    const data = variants[v];
+
+    data.current = Math.max(
+        0,
+        Math.min(MAX_IMAGES - 1, data.current + direction)
+    );
+
+    setActiveVariant(v);
+    renderVariant(v);
+}
+
+// ---------- DELETE IMAGE ----------
+
+async function removeCurrentImage(v) {
+    const data = variants[v];
+    const index = data.current;
+
+    if (!data.images[index]) {
+        showToast("В этой ячейке нет изображения");
+        return;
+    }
+
+    if (data.urls[index]) {
+        URL.revokeObjectURL(data.urls[index]);
+        data.urls[index] = null;
+    }
+
+    await deleteImage(imageKey(v, index));
+
+    data.images[index] = null;
+
+    renderVariant(v);
+    showToast("Изображение удалено");
+}
+
+// ---------- FULLSCREEN ----------
+
+function openCurrentFullscreen(v) {
+    const image = variants[v].images[variants[v].current];
+
+    if (!image) return;
+
+    const url = URL.createObjectURL(image);
+
+    const fullscreen = document.getElementById("fullscreen");
+    const fullscreenImage = document.getElementById("fullscreenImage");
+
+    fullscreenImage.src = url;
+    fullscreen.style.display = "flex";
+
+    fullscreen.dataset.url = url;
+}
+
+function closeFullscreen() {
+    const fullscreen = document.getElementById("fullscreen");
+    const url = fullscreen.dataset.url;
+
+    if (url) URL.revokeObjectURL(url);
+
+    fullscreen.style.display = "none";
+    fullscreen.dataset.url = "";
+    document.getElementById("fullscreenImage").src = "";
+}
+
+// ---------- KEYBOARD ----------
+
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+        closeFullscreen();
+    }
+});
+
+// ---------- START ----------
+
+initialize().catch(error => {
+    console.error(error);
+    showToast("Ошибка при запуске сайта");
+});
+</script>
+
+</body>
+</html>
